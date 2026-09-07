@@ -12,7 +12,7 @@ jobs:
     name: 执行保活
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # 由 read 改为 write：用于把运行时间记录提交回 README.md
       actions: write
     concurrency:
       group: lunes-keepalive
@@ -44,6 +44,60 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python scripts/Lunes-Keep.py
+
+      - name: 📝 更新最近运行时间到 README.md
+        if: always()
+        env:
+          RUN_STATUS: ${{ job.status }}
+        run: |
+          # 当前运行时间（北京时间）
+          RUN_TIME=$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')
+          if [ "$RUN_STATUS" = "success" ]; then
+            ENTRY="- 🕒 ${RUN_TIME}（北京时间）✅ 保活成功"
+          else
+            ENTRY="- 🕒 ${RUN_TIME}（北京时间）❌ 运行${RUN_STATUS}"
+          fi
+
+          if [ ! -f README.md ]; then
+            # README.md 不存在：自动创建并写入最近运行时间区块
+            {
+              echo "# Lunes Host 自动保活"
+              echo ""
+              echo "## 🕒 最近运行时间"
+              echo ""
+              echo "<!-- RUN_LOG_START -->"
+              echo "${ENTRY}"
+              echo "<!-- RUN_LOG_END -->"
+            } > README.md
+          elif grep -q '<!-- RUN_LOG_START -->' README.md; then
+            # 已有标记：把上一次的时间替换为本次（只保留最新一条）
+            awk -v entry="${ENTRY}" '
+              /<!-- RUN_LOG_END -->/ {inblock=0}
+              !inblock {print}
+              /<!-- RUN_LOG_START -->/ {inblock=1; print entry}
+            ' README.md > README.tmp && mv README.tmp README.md
+          else
+            # 无标记：在文件末尾追加最近运行时间区块（不影响已有内容）
+            {
+              echo ""
+              echo "## 🕒 最近运行时间"
+              echo ""
+              echo "<!-- RUN_LOG_START -->"
+              echo "${ENTRY}"
+              echo "<!-- RUN_LOG_END -->"
+            } >> README.md
+          fi
+
+          # 提交并推送（GITHUB_TOKEN 的 push 不会触发其他 workflow，无循环风险）
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "README.md 无变化，跳过提交"
+          else
+            git commit -m "chore: 更新最近运行时间 ${RUN_TIME} [skip ci]"
+            git push
+          fi
 
 #      - name: 上传截图
 #        uses: actions/upload-artifact@v4
